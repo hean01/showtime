@@ -1,0 +1,103 @@
+#import "theme://include/separators.view"
+
+widget(container_y, {
+  .spacing = 10;
+
+  widget(label, {
+    .align = left; 
+    .caption = $args.metadata.title;
+    .ellipsize = true;
+    .sizeScale = 1.5;
+  });
+
+  widget(label, {
+    .caption = $args.metadata.description;
+    .maxlines = 10;
+    .sizeScale = 1.0;
+  });
+
+  HORIZONTAL_SEPARATOR();
+
+  widget(container_y, {
+    widget(container_x, {
+      .filterConstraintX = true;
+      .spacing = 15;
+
+      widget(container_y, {
+        .spacing = 10;
+
+        widget(label, {
+	  .color = [0.5, 0.5, 0.5];
+	  .caption = "Channel:";
+	});
+
+	widget(label, {
+	  .color = [0.5, 0.5, 0.5];
+	  .caption = "Date:";
+	});
+
+	widget(label, {
+	  .hidden = translate($args.metadata.state, 1,
+	  	              "scheduled", 0);
+	  .color = [0.5, 0.5, 0.5];
+	  .caption = "Scheduled:";
+	});
+
+	widget(label, {
+	  .hidden = translate($args.metadata.state, 1,
+	  	              "completed", 0);
+	  .color = [0.5, 0.5, 0.5];
+	  .caption = "Duration:";
+	});
+
+        widget(label, {
+ 	  .color = [0.5, 0.5, 0.5];
+	  .caption = "Status:";
+        });
+
+      });
+      
+      widget(container_y, {
+        .spacing = 10;
+        .filterConstraintX = true;
+
+    	widget(container_x, {
+    	  .spacing = 5;
+      	  widget(icon, {
+            .align = right;
+            .source = $args.metadata.channel.icon;
+      	  });
+      	  widget(label, {
+            .align = right;
+            .caption = $args.metadata.channel.title;
+      	  });
+    	});
+
+    	// Date
+    	widget(label, {
+    	  .caption = strftime($args.metadata.start, "%Y-%m-%d");
+    	});
+	
+	// schedule
+   	widget(label, {
+	  .hidden = translate($args.metadata.state, 1,
+	  	    "scheduled", 0);
+	  .caption = strftime($args.metadata.start, "%H:%M") + " - " + strftime($args.metadata.stop, "%H:%M");
+    	});	  
+
+  	// duration
+   	widget(label, {
+	  .hidden = translate($args.metadata.state, 1,
+	  	    "completed", 0);
+      	  .caption = value2duration($args.metadata.stop - $args.metadata.start);
+    	});
+
+    	// Status
+    	widget(label, {
+    	  .caption = $args.metadata.state;
+    	});
+	  
+      });
+    });
+  });
+});

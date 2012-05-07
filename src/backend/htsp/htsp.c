@@ -49,6 +49,7 @@ TAILQ_HEAD(htsp_msg_queue, htsp_msg);
 LIST_HEAD(htsp_subscription_list, htsp_subscription);
 LIST_HEAD(htsp_subscription_stream_list, htsp_subscription_stream);
 LIST_HEAD(htsp_tag_list, htsp_tag);
+LIST_HEAD(htsp_dvr_entry_list, htsp_dvr_entry);
 TAILQ_HEAD(htsp_channel_queue, htsp_channel);
 
 static struct htsp_connection_list htsp_connections;
@@ -76,6 +77,7 @@ typedef struct htsp_channel {
   int ch_channel_num;
   prop_t *ch_root;
 
+  prop_t *ch_prop_metadata;
   prop_t *ch_prop_icon;
   prop_t *ch_prop_title;
   prop_t *ch_prop_channelNumber;
@@ -83,6 +85,25 @@ typedef struct htsp_channel {
 
 } htsp_channel_t;
 
+/**
+ *
+ */
+typedef struct htsp_dvr_entry {
+  LIST_ENTRY(htsp_dvr_entry) de_link;
+  int de_id;
+  int de_channel;
+  int de_start;
+  prop_t *de_root;
+
+  prop_t *de_prop_metadata;
+  prop_t *de_prop_channel;
+  prop_t *de_prop_start;
+  prop_t *de_prop_stop;
+  prop_t *de_prop_title;
+  prop_t *de_prop_description;
+  prop_t *de_prop_state;
+  prop_t *de_prop_error;
+} htsp_dvr_entry_t;
 
 /**
  *
@@ -103,11 +124,17 @@ typedef struct htsp_connection {
   int hc_seq_generator;
   int hc_sid_generator; /* Subscription ID */
 
+  prop_t *hc_main_model;
+  prop_t *hc_main_nodes;
+
   prop_t *hc_channels_model;
   prop_t *hc_channels_nodes;
 
   prop_t *hc_tags_model;
   prop_t *hc_tags_nodes;
+
+  prop_t *hc_dvr_entries_model;
+  prop_t *hc_dvr_entries_nodes;
 
   hts_mutex_t hc_rpc_mutex;
   hts_cond_t hc_rpc_cond;
@@ -124,6 +151,7 @@ typedef struct htsp_connection {
   hts_mutex_t hc_meta_mutex;
   struct htsp_tag_list hc_tags;
   struct htsp_channel_queue hc_channels;
+  struct htsp_dvr_entry_list hc_dvr_entries;
 
 } htsp_connection_t;
 
@@ -500,6 +528,182 @@ channel_compar(htsp_channel_t *a, htsp_channel_t *b)
 /**
  *
  */
+static htsp_dvr_entry_t *
+htsp_dvr_entry_get(htsp_connection_t *hc, int id)
+{
+  htsp_dvr_entry_t *de;
+  LIST_FOREACH(de, &hc->hc_dvr_entries, de_link)
+    if(de->de_id == id)
+      break;
+  return de;
+}
+
+/*
+ *
+ */
+static int 
+dvr_entry_compar(htsp_dvr_entry_t *a, htsp_dvr_entry_t *b)
+{
+  if(a->de_start == b->de_start) {
+    if(a->de_channel < b->de_channel)
+      return -1;
+    if(a->de_channel > b->de_channel)
+      return 1;
+    return 0;
+  }
+  if(a->de_start < b->de_start)
+    return -1;
+  if(a->de_start > b->de_start)
+    return 1;
+  return 0;
+}
+
+/**
+ *
+ */
+static void
+htsp_dvrEntryAddUpdate(htsp_connection_t *hc, htsmsg_t *m, int create)
+{
+  uint32_t id, channel, start, stop;
+  prop_t *p;
+  char txt[200];
+  htsp_dvr_entry_t *de, *n;
+  const char *title, *description, *state, *error;
+
+  if(htsmsg_get_u32(m, "id", &id))
+    return;
+
+  htsmsg_get_u32(m, "channel", &channel);
+  htsmsg_get_u32(m, "start", &start);
+  htsmsg_get_u32(m, "stop", &stop);
+  title = htsmsg_get_str(m, "title");
+  description = htsmsg_get_str(m, "description");
+  state = htsmsg_get_str(m, "state");
+  error = htsmsg_get_str(m, "error");
+
+  if(create) {
+    TRACE(TRACE_DEBUG, "HTSP", "Got new dvr entry %d", id);
+    de = calloc(1, sizeof(htsp_dvr_entry_t));
+    de->de_id = id;
+    de->de_start = id;
+    
+    LIST_INSERT_SORTED(&hc->hc_dvr_entries, de, de_link, dvr_entry_compar);
+    n = LIST_NEXT(de, de_link);
+
+    snprintf(txt, sizeof(txt), "%d", id);
+    de->de_root = prop_create_root(txt);
+    p = de->de_root;
+    
+    snprintf(txt, sizeof(txt), "http://%s:%d/dvrfile/%d",
+	     hc->hc_hostname, hc->hc_port-1, id);
+
+    prop_set_string(prop_create(p, "url"), txt);
+    prop_set_string(prop_create(p, "type"), "dvr");
+
+    prop_t *m = de->de_prop_metadata = prop_create(p, "metadata");
+    de->de_prop_start = prop_create(m, "start");
+    de->de_prop_stop = prop_create(m, "stop");
+    de->de_prop_title = prop_create(m, "title");
+    de->de_prop_description = prop_create(m, "description");
+    de->de_prop_state = prop_create(m, "state");
+    de->de_prop_error = prop_create(m, "error");
+
+    htsp_channel_t *ch = htsp_channel_get(hc, channel);
+    if(ch) {
+      TRACE(TRACE_DEBUG,"HTSP", "Linking dvrentry %d to channel %d.", de->de_id, channel);
+      de->de_prop_channel = prop_create(m, "channel");
+      prop_link(ch->ch_prop_metadata, de->de_prop_channel);
+    } else
+      TRACE(TRACE_ERROR,"HTSP", "Failed to find channel %d for dvrentry %d.", channel, de->de_id);
+
+    if(prop_set_parent_ex(de->de_root, hc->hc_dvr_entries_nodes,
+			  n ? n->de_root : NULL, NULL))
+      abort();
+  }
+  else {
+    int move = 0;
+    de = htsp_dvr_entry_get(hc, id);
+    if(de == NULL) {
+      TRACE(TRACE_ERROR, "HTSP", "Got update for unknown dvr entry %d", id);
+      return;
+    }
+    else
+      TRACE(TRACE_DEBUG, "HTSP", "Got update for dvr entry %d", id);
+
+    p = de->de_root;
+
+    if(de->de_channel != channel) {
+      htsp_channel_t *ch = htsp_channel_get(hc, channel);
+      if(ch) {
+	TRACE(TRACE_ERROR,"HTSP", "Relink dvrentry chanel from %d to %d.", de->de_channel, channel);
+	prop_link(ch->ch_prop_metadata, de->de_prop_channel);
+      } else
+	TRACE(TRACE_ERROR,"HTSP", "Failed to relink channel from %d to %d.", de->de_channel, channel);
+
+      de->de_channel = channel;
+      move = 1;
+    }
+
+    if(de->de_start != start) {
+      de->de_start = start;
+      move = 1;
+    }
+    
+    if(move) {
+      LIST_REMOVE(de, de_link);
+      LIST_INSERT_SORTED(&hc->hc_dvr_entries, de, de_link, dvr_entry_compar);
+      n = LIST_NEXT(de, de_link);
+      prop_move(p, n ? n->de_root : NULL);
+    }
+  }
+
+  prop_set_int(de->de_prop_start, start);
+  prop_set_int(de->de_prop_stop, stop);
+  prop_set_string(de->de_prop_state, state);
+  if(description)
+    prop_set_string(de->de_prop_description, description);
+  if(title)
+    prop_set_string(de->de_prop_title, title);
+  if(error)
+    prop_set_string(de->de_prop_error, error);
+  
+}
+
+/**
+ *
+ */
+static void
+dvr_entry_destroy(htsp_connection_t *hc, htsp_dvr_entry_t *de)
+{
+  TRACE(TRACE_DEBUG, "HTSP", "dvr_entry_destroy(): %s", prop_get_string(de->de_prop_title));
+  LIST_REMOVE(de, de_link);
+  prop_destroy(de->de_root);
+  free(de);
+}
+
+/**
+ *
+ */
+static void
+htsp_dvrEntryDelete(htsp_connection_t *hc, htsmsg_t *m)
+{
+  uint32_t id;
+  htsp_dvr_entry_t *de;
+
+  if(htsmsg_get_u32(m, "id", &id))
+    return;
+
+  hts_mutex_lock(&hc->hc_meta_mutex);
+
+  if((de = htsp_dvr_entry_get(hc, id)) != NULL)
+    dvr_entry_destroy(hc, de);
+
+  hts_mutex_unlock(&hc->hc_meta_mutex);
+}
+
+/**
+ *
+ */
 static void
 htsp_channelAddUpdate(htsp_connection_t *hc, htsmsg_t *m, int create)
 {
@@ -529,7 +733,7 @@ htsp_channelAddUpdate(htsp_connection_t *hc, htsmsg_t *m, int create)
     ch = calloc(1, sizeof(htsp_channel_t));
     p = ch->ch_root = prop_create_root(txt);
 
-    prop_t *m = prop_create(p, "metadata");
+    prop_t *m = ch->ch_prop_metadata = prop_create(p, "metadata");
     ch->ch_prop_icon = prop_create(m, "icon");
     ch->ch_prop_title = prop_create(m, "title");
     ch->ch_prop_channelNumber = prop_create(m, "channelNumber");
@@ -897,6 +1101,12 @@ htsp_worker_thread(void *aux)
 	htsp_queueStatus(hc, m);
       else if(!strcmp(method, "signalStatus"))
 	htsp_signalStatus(hc, m);
+      else if(!strcmp(method, "dvrEntryAdd"))
+	htsp_dvrEntryAddUpdate(hc, m, 1);
+      else if(!strcmp(method, "dvrEntryUpdate"))
+	htsp_dvrEntryAddUpdate(hc, m, 0);
+      else if(!strcmp(method, "dvrEntryDelete"))
+	htsp_dvrEntryDelete(hc, m);
       else if(!strcmp(method, "initialSyncCompleted")) {
 	/* nop for us */
       } else
@@ -1104,15 +1314,37 @@ htsp_connection_find(const char *url, char *path, size_t pathlen,
 
   hc = calloc(1, sizeof(htsp_connection_t));
 
-  hc->hc_tags_model = prop_create_root(NULL);
+  hc->hc_main_model = prop_create_root(NULL);
+  hc->hc_main_nodes  = prop_create(hc->hc_main_model, "nodes");
+  prop_set_string(prop_create(hc->hc_main_model, "type"), "directory");
+  meta = prop_create(hc->hc_main_model, "metadata");
+  prop_set_string(prop_create(meta, "title"), "TV");
+  prop_set_stringf(prop_create(hc->hc_main_model, "url"),
+		   "htsp://%s:%d/", hostname, port);
+  prop_set_string(prop_create(hc->hc_main_model, "type"),
+		  "directory");
+
+  nodes = prop_create(hc->hc_main_model, "nodes");
+
+  hc->hc_tags_model = prop_create(nodes, NULL);
   hc->hc_tags_nodes  = prop_create(hc->hc_tags_model, "nodes");
   prop_set_string(prop_create(hc->hc_tags_model, "type"), "directory");
   meta = prop_create(hc->hc_tags_model, "metadata");
   prop_set_string(prop_create(meta, "title"), "Channel groups");
+  prop_set_stringf(prop_create(hc->hc_tags_model, "url"),
+		   "htsp://%s:%d/tags", hostname, port);
+  prop_set_string(prop_create(hc->hc_tags_model, "type"),
+		  "directory");
 
-  
-  nodes = prop_create(hc->hc_tags_model, "nodes");
-
+  hc->hc_dvr_entries_model = prop_create(nodes, NULL);
+  hc->hc_dvr_entries_nodes = prop_create(hc->hc_dvr_entries_model, "nodes");
+  prop_set_string(prop_create(hc->hc_dvr_entries_model, "type"), "directory");
+  meta = prop_create(hc->hc_dvr_entries_model, "metadata");
+  prop_set_string(prop_create(meta, "title"), "DVR");
+  prop_set_stringf(prop_create(hc->hc_dvr_entries_model, "url"),
+		   "htsp://%s:%d/dvr", hostname, port);
+  prop_set_string(prop_create(hc->hc_dvr_entries_model, "type"),
+		  "directory");
 
   hc->hc_channels_model = prop_create(nodes, NULL);
   hc->hc_channels_nodes  = prop_create(hc->hc_channels_model, "nodes");
@@ -1155,6 +1387,7 @@ htsp_connection_find(const char *url, char *path, size_t pathlen,
 			     THREAD_PRIO_LOW);
 
   hts_mutex_unlock(&htsp_global_mutex);
+
   return hc;
 }
 
@@ -1234,14 +1467,22 @@ be_htsp_open(prop_t *page, const char *url)
     
     make_model(page, "Channels", hc->hc_channels_nodes);
 
+  } else if(!strcmp(path, "/dvr")) {
+
+    make_model(page, "DVR", hc->hc_dvr_entries_nodes);
+
+  } else if(!strcmp(path, "/tags")) {
+
+    make_model(page, "Tags", hc->hc_tags_nodes);
+
   } else if(!strncmp(path, "/tag/", strlen("/tag/"))) {
     prop_t *model;
     model = prop_create(hc->hc_tags_nodes, path + strlen("/tag/"));
     make_model2(page, model);
 
-  } else if(!strcmp(path, "")) {
+  } else if(!strcmp(path, "") || !strcmp(path, "/")) {
 
-    make_model(page, "Tags", hc->hc_tags_nodes);
+    make_model(page, "TV", hc->hc_main_nodes);
 
   } else {
     nav_open_errorf(page, _("Invalid HTSP URL"));
