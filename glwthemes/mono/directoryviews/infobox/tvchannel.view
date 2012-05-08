@@ -30,6 +30,13 @@ widget(container_y, {
         .color = select(isFocused(), 1.0, 0.6);
       });
 
+      widget(label, {
+        .align = right;
+	.caption = $self.dvr.state;
+	.ellipsize = true;
+        .color = select(isFocused(), 1.0, 0.6);
+      });
+
     });
   });
 
