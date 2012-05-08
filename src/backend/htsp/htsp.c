@@ -50,6 +50,7 @@ LIST_HEAD(htsp_subscription_list, htsp_subscription);
 LIST_HEAD(htsp_subscription_stream_list, htsp_subscription_stream);
 LIST_HEAD(htsp_tag_list, htsp_tag);
 LIST_HEAD(htsp_dvr_entry_list, htsp_dvr_entry);
+LIST_HEAD(htsp_event_list, htsp_event);
 TAILQ_HEAD(htsp_channel_queue, htsp_channel);
 
 static struct htsp_connection_list htsp_connections;
@@ -75,6 +76,12 @@ typedef struct htsp_channel {
   int ch_id;
   char *ch_title;
   int ch_channel_num;
+
+  uint32_t ch_event_id;
+  uint32_t ch_next_event_id;
+
+  struct htsp_event_list ch_events;
+
   prop_t *ch_root;
 
   prop_t *ch_prop_metadata;
@@ -84,6 +91,28 @@ typedef struct htsp_channel {
   prop_t *ch_prop_events;
 
 } htsp_channel_t;
+
+/**
+ *
+ */
+typedef struct htsp_event {
+  LIST_ENTRY(htsp_event) ev_link;
+  int ev_id;
+  int ev_start;
+  int ev_dvr_id;
+  int ev_next_event_id;
+
+  prop_t *ev_root;
+  prop_t *ev_prop_channel;
+  prop_t *ev_prop_dvr;
+
+  prop_t *ev_prop_start;
+  prop_t *ev_prop_stop;
+  prop_t *ev_prop_title;
+  prop_t *ev_prop_description;
+  prop_t *ev_prop_content_type;
+  
+} htsp_event_t;
 
 /**
  *
@@ -206,7 +235,7 @@ static void htsp_mux_input(htsp_connection_t *hc, htsmsg_t *m);
 
 static htsmsg_t *htsp_reqreply(htsp_connection_t *hc, htsmsg_t *m);
 
-
+static htsp_dvr_entry_t *htsp_dvr_entry_get(htsp_connection_t *hc, int id);
 
 static htsmsg_t *
 htsp_recv(htsp_connection_t *hc)
@@ -420,17 +449,51 @@ htsp_login(htsp_connection_t *hc)
 /**
  *
  */
+static int 
+event_compar(htsp_event_t *a, htsp_event_t *b)
+{
+  if(a->ev_start < b->ev_start)
+    return -1;
+  if(a->ev_start > b->ev_start)
+    return 1;
+  return 0;
+}
+
+/**
+ *
+ */
 static void
-update_events(htsp_connection_t *hc, prop_t *metadata, int id, int next)
+event_destroy(htsp_connection_t *hc, htsp_event_t *ev)
+{
+  LIST_REMOVE(ev, ev_link);
+  prop_destroy(ev->ev_root);
+  free(ev);
+}
+
+/**
+ *
+ */
+static void
+//update_events(htsp_connection_t *hc, prop_t *metadata, int id, int next)
+update_events(htsp_connection_t *hc, htsp_channel_t *ch)
 {
   int i;
   htsmsg_t *m;
-  prop_t *events        = prop_create(metadata, "list");
-  prop_t *current_event = prop_create(metadata, "current");
-  prop_t *next_event    = prop_create(metadata, "next");
+  prop_t *events        = prop_create(ch->ch_prop_events, "list");
+  prop_t *current_event = prop_create(ch->ch_prop_events, "current");
+  prop_t *next_event    = prop_create(ch->ch_prop_events, "next");
   char buf[10];
   uint32_t u32;
   int linkstate = 0;
+
+  int id = ch->ch_event_id;
+  int next = ch->ch_next_event_id;
+
+  // clean up all events in list
+  htsp_event_t *ev;
+  while((ev = LIST_FIRST(&ch->ch_events)) != NULL) {
+    event_destroy(hc, ev);
+  }
 
   if(id == 0) {
 
@@ -454,15 +517,39 @@ update_events(htsp_connection_t *hc, prop_t *metadata, int id, int next)
     
       if((m = htsp_reqreply(hc, m)) != NULL) {
 
-	prop_t *e = prop_create(events, buf);
-	prop_set_string(prop_create(e, "title"), htsmsg_get_str(m, "title"));
-	prop_set_string(prop_create(e, "description"),
-			htsmsg_get_str(m, "description"));
+	htsp_event_t *ev = calloc(1, sizeof(htsp_event_t));
+	ev->ev_id = id;
+	ev->ev_start = 0;
+	ev->ev_dvr_id = htsmsg_get_u32_or_default(m, "dvrId", 0);
+	ev->ev_next_event_id = htsmsg_get_u32_or_default(m, "nextEventId", 0);
+
 	if(!htsmsg_get_u32(m, "start", &u32))
-	  prop_set_int(prop_create(e, "start"), u32);
+	  ev->ev_start = u32;
+
+	LIST_INSERT_SORTED(&ch->ch_events, ev, ev_link, event_compar);
+
+	prop_t *e = ev->ev_root = prop_create(events, buf);
+	ev->ev_prop_title = prop_create(e, "title");
+	ev->ev_prop_description = prop_create(e, "description");
+	ev->ev_prop_start = prop_create(e, "start");
+	ev->ev_prop_stop = prop_create(e, "stop");
+	ev->ev_prop_content_type = prop_create(e, "contentType");
+	ev->ev_prop_channel = prop_create(e, "channel");
+	ev->ev_prop_dvr = prop_create(e, "dvr");
+
+	prop_link(ch->ch_prop_metadata, ev->ev_prop_channel);
+	if(ev->ev_dvr_id != 0) {
+	  htsp_dvr_entry_t *de = htsp_dvr_entry_get(hc, ev->ev_dvr_id);
+	  if(de)
+	    prop_link(de->de_prop_metadata, ev->ev_prop_dvr);
+	}
+
+	prop_set_string(ev->ev_prop_title, htsmsg_get_str(m, "title"));
+	prop_set_string(ev->ev_prop_description, htsmsg_get_str(m, "description"));
+	prop_set_int(ev->ev_prop_start, ev->ev_start);
 	
 	if(!htsmsg_get_u32(m, "stop", &u32))
-	  prop_set_int(prop_create(e, "stop"), u32);
+	  prop_set_int(ev->ev_prop_stop, u32);
 
 	switch(linkstate) {
 	case 0:
@@ -473,7 +560,7 @@ update_events(htsp_connection_t *hc, prop_t *metadata, int id, int next)
 	  break;
 	}
 	linkstate++;
-	id = htsmsg_get_u32_or_default(m, "nextEventId", 0);
+	id = ev->ev_next_event_id;
 	continue;
       } else {
 	id = 0;
@@ -615,6 +702,9 @@ htsp_dvrEntryAddUpdate(htsp_connection_t *hc, htsmsg_t *m, int create)
       TRACE(TRACE_DEBUG,"HTSP", "Linking dvrentry %d to channel %d.", de->de_id, channel);
       de->de_prop_channel = prop_create(m, "channel");
       prop_link(ch->ch_prop_metadata, de->de_prop_channel);
+
+      update_events(hc, ch);
+
     } else
       TRACE(TRACE_ERROR,"HTSP", "Failed to find channel %d for dvrentry %d.", channel, de->de_id);
 
@@ -711,7 +801,7 @@ htsp_dvrEntryDelete(htsp_connection_t *hc, htsmsg_t *m)
 static void
 htsp_channelAddUpdate(htsp_connection_t *hc, htsmsg_t *m, int create)
 {
-  uint32_t id, next;
+  uint32_t id;
   int chnum;
   prop_t *p;
   char txt[200];
@@ -801,12 +891,12 @@ htsp_channelAddUpdate(htsp_connection_t *hc, htsmsg_t *m, int create)
   if(chnum != -1)
     prop_set_int(ch->ch_prop_channelNumber, chnum);
 
+  if(htsmsg_get_u32(m, "eventId", &ch->ch_event_id))
+    ch->ch_event_id = 0;
+  if(htsmsg_get_u32(m, "nextEventId", &ch->ch_next_event_id))
+    ch->ch_next_event_id = 0;
 
-  if(htsmsg_get_u32(m, "eventId", &id))
-    id = 0;
-  if(htsmsg_get_u32(m, "nextEventId", &next))
-    next = 0;
-  update_events(hc, ch->ch_prop_events, id, next);
+  update_events(hc, ch);
 }
 
 
