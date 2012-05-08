@@ -16,9 +16,20 @@ widget(container_y, {
 
     cloner($args.metadata.events.list, container_x, {
 
-      widget(label, {
+      widget(icon, {
+	.weight = 0.09;
 	.filterConstraintX = true;
-	.weight = 0.3;
+	.source = translate($self.dvr.state, void,
+		"recording", "theme://svg/Recording.svg",
+		"scheduled", "theme://svg/Scheduled.svg",
+		"completed", "theme://svg/Check.svg",
+		"error", "theme://svg/Alert.svg");
+	.color = 0.5;
+      });
+
+      widget(label, {
+	.weight = 0.2;
+	.filterConstraintX = true;
 	.caption = strftime($self.start, "%H:%M");
       });
 
@@ -27,13 +38,6 @@ widget(container_y, {
 	.ellipsize = true;
 	.focusable = true;
 	.focusOnClick = true;
-        .color = select(isFocused(), 1.0, 0.6);
-      });
-
-      widget(label, {
-        .align = right;
-	.caption = $self.dvr.state;
-	.ellipsize = true;
         .color = select(isFocused(), 1.0, 0.6);
       });
 
