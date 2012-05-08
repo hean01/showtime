@@ -581,6 +581,8 @@ htsp_dvrEntryAddUpdate(htsp_connection_t *hc, htsmsg_t *m, int create)
   state = htsmsg_get_str(m, "state");
   error = htsmsg_get_str(m, "error");
 
+  hts_mutex_lock(&hc->hc_meta_mutex);
+
   if(create) {
     TRACE(TRACE_DEBUG, "HTSP", "Got new dvr entry %d", id);
     de = calloc(1, sizeof(htsp_dvr_entry_t));
@@ -656,6 +658,8 @@ htsp_dvrEntryAddUpdate(htsp_connection_t *hc, htsmsg_t *m, int create)
       prop_move(p, n ? n->de_root : NULL);
     }
   }
+
+  hts_mutex_unlock(&hc->hc_meta_mutex);  
 
   prop_set_int(de->de_prop_start, start);
   prop_set_int(de->de_prop_stop, stop);
