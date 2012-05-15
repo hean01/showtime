@@ -363,6 +363,7 @@ SRCS-$(CONFIG_GU) +=    src/ui/gu/gu.c \
 # IPC
 #
 SRCS                +=  src/ipc/ipc.c
+SRCS                +=  src/ipc/liev.c
 SRCS-$(CONFIG_LIRC) +=  src/ipc/lirc.c
 SRCS-$(CONFIG_STDIN)+=  src/ipc/stdin.c
 
