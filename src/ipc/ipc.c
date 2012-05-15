@@ -8,6 +8,8 @@ ipc_init(void)
   lirc_start();
 #endif
 
+  liev_start();
+
 #if ENABLE_SERDEV
   extern int enable_serdev;
   if(enable_serdev)
