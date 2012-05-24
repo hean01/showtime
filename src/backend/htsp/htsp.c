@@ -725,6 +725,7 @@ static void
 dvr_entry_dispatch_action(dvr_entry_action_ctrl_t *deac, const char *action)
 {
   uint32_t success;
+  const char *msg;
   htsmsg_t *m;
   if(!strcmp(action, "delete")) {
     TRACE(TRACE_DEBUG, "HTSP", "delete action on dvr entry %d", deac->de_id);
@@ -733,9 +734,12 @@ dvr_entry_dispatch_action(dvr_entry_action_ctrl_t *deac, const char *action)
     htsmsg_add_u32(m, "id", deac->de_id);
     if((m = htsp_reqreply(deac->de_hc, m)) != NULL) {
       htsmsg_get_u32(m, "success", &success);
-      if(success != 1)
-	  TRACE(TRACE_DEBUG,"HTSP", 
-		"Failed to delete dvr entry id %d",deac->de_id);     
+      if(success != 1) {
+	msg = htsmsg_get_str(m, "error");
+	if(!msg)
+	  msg = "Failed to delete dvr entry";
+	TRACE(TRACE_DEBUG,"HTSP", msg);
+      }
     }
   } else {
     TRACE(TRACE_DEBUG, "HTSP", "Unknown action '%s' on dvr entry", action);
