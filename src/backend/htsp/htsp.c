@@ -729,7 +729,7 @@ dvr_entry_dispatch_action(dvr_entry_action_ctrl_t *deac, const char *action)
     TRACE(TRACE_DEBUG, "HTSP", "delete action on dvr entry %d", deac->de_id);
     m = htsmsg_create_map();
     htsmsg_add_str(m, "method", "deleteDvrEntry");
-    htsmsg_add_u32(m, "dvrEntryId", deac->de_id);
+    htsmsg_add_u32(m, "id", deac->de_id);
     if((m = htsp_reqreply(deac->de_hc, m)) != NULL) {
       htsmsg_get_u32(m, "success", &success);
       if(success != 1)
