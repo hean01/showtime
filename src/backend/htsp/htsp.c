@@ -165,6 +165,9 @@ typedef struct htsp_connection {
   prop_t *hc_dvr_entries_model;
   prop_t *hc_dvr_entries_nodes;
 
+  int hc_pending_events;
+  prop_courier_t *hc_event_courier;
+
   hts_mutex_t hc_rpc_mutex;
   hts_cond_t hc_rpc_cond;
   struct htsp_msg_queue hc_rpc_queue;
@@ -449,6 +452,63 @@ htsp_login(htsp_connection_t *hc)
 /**
  *
  */
+typedef struct event_action_ctrl {
+  int ev_id;
+} event_action_ctrl_t;
+
+/**
+ *
+ */
+static void
+event_dispatch_action(event_action_ctrl_t *evac, const char *action)
+{
+  if(!strcmp(action, "addSchedule")) {
+    // HTSP msg addDvrEntry
+    TRACE(TRACE_INFO, "HTSP", "addSchedule action on event %d", 0);
+  } else {
+    TRACE(TRACE_DEBUG, "HTSP", "Unknown action '%s' on event", action);
+  }
+}
+
+static void
+event_action_handler(void *opaque, prop_event_t event, ...)
+{
+  event_action_ctrl_t *evac = opaque;
+  va_list ap;
+  event_t *e;
+
+  va_start(ap, event);
+
+  TRACE(TRACE_DEBUG, "HTSP", "Event id %d action handler event %d", evac->ev_id, event);
+
+  switch(event) {
+  case PROP_DESTROYED:
+    free(evac);
+    break;
+  case PROP_EXT_EVENT:
+    e =  va_arg(ap, event_t *);
+
+    if(event_is_type(e, EVENT_ACTION_VECTOR)) {
+      event_action_vector_t *eav = (event_action_vector_t *)e;
+      int i;
+      for(i = 0; i < eav->num; i++)
+	event_dispatch_action(evac, action_code2str(eav->actions[i]));
+    
+    } else if(event_is_type(e, EVENT_DYNAMIC_ACTION)) {
+      event_dispatch_action(evac, e->e_payload);
+    }
+    break;
+
+  default:
+    break;
+  }
+
+  va_end(ap);
+}
+
+/**
+ *
+ */
 static int 
 event_compar(htsp_event_t *a, htsp_event_t *b)
 {
@@ -547,6 +607,14 @@ update_events(htsp_connection_t *hc, htsp_channel_t *ch)
 	prop_set_string(ev->ev_prop_title, htsmsg_get_str(m, "title"));
 	prop_set_string(ev->ev_prop_description, htsmsg_get_str(m, "description"));
 	prop_set_int(ev->ev_prop_start, ev->ev_start);
+
+	event_action_ctrl_t *evac = calloc(1, sizeof(event_action_ctrl_t));
+	evac->ev_id = ev->ev_id;
+	prop_subscribe(PROP_SUB_TRACK_DESTROY,
+		 PROP_TAG_CALLBACK, event_action_handler, evac,
+		 PROP_TAG_COURIER, hc->hc_event_courier,
+		 PROP_TAG_ROOT, e,
+		 NULL);
 	
 	if(!htsmsg_get_u32(m, "stop", &u32))
 	  prop_set_int(ev->ev_prop_stop, u32);
@@ -1137,6 +1205,20 @@ tag_delete_all(htsp_connection_t *hc)
 
 
 /**
+ * The courier kicks on worker thread to process events.
+ */
+static void
+htsp_courier_notify(void *opaque)
+{
+  htsp_connection_t *hc = opaque;
+  hts_mutex_lock(&hc->hc_worker_mutex);
+  hc->hc_pending_events = 1;
+  hts_cond_signal(&hc->hc_worker_cond);
+  hts_mutex_unlock(&hc->hc_worker_mutex);
+}
+
+
+/**
  *
  * We keep another thread for dispatching unsolicited (asynchronous)
  * messages. Reason is that these messages may in turn cause additional
@@ -1159,8 +1241,15 @@ htsp_worker_thread(void *aux)
     
     hts_mutex_lock(&hc->hc_worker_mutex);
 
-    while((hm = TAILQ_FIRST(&hc->hc_worker_queue)) == NULL)
+    while((hm = TAILQ_FIRST(&hc->hc_worker_queue)) == NULL && hc->hc_pending_events == 0)
       hts_cond_wait(&hc->hc_worker_cond, &hc->hc_worker_mutex);
+
+    if(hc->hc_pending_events != 0) {
+      hc->hc_pending_events = 0;
+      hts_mutex_unlock(&hc->hc_worker_mutex);
+      prop_courier_poll(hc->hc_event_courier);
+      continue;
+    }
 
     TAILQ_REMOVE(&hc->hc_worker_queue, hm, hm_link);
     hts_mutex_unlock(&hc->hc_worker_mutex);
@@ -1450,7 +1539,8 @@ htsp_connection_find(const char *url, char *path, size_t pathlen,
   prop_set_string(prop_create(hc->hc_channels_model, "type"),
 		  "directory");
 
-    
+  hc->hc_event_courier = prop_courier_create_notify(htsp_courier_notify, hc);
+
   hts_mutex_init(&hc->hc_rpc_mutex);
   hts_cond_init(&hc->hc_rpc_cond, &hc->hc_rpc_mutex);
   TAILQ_INIT(&hc->hc_rpc_queue);
