@@ -454,6 +454,7 @@ htsp_login(htsp_connection_t *hc)
  */
 typedef struct event_action_ctrl {
   int ev_id;
+  htsp_connection_t *ev_hc;
 } event_action_ctrl_t;
 
 /**
@@ -462,9 +463,23 @@ typedef struct event_action_ctrl {
 static void
 event_dispatch_action(event_action_ctrl_t *evac, const char *action)
 {
+  uint32_t success;
+  const char *msg;
+  htsmsg_t *m;
   if(!strcmp(action, "addSchedule")) {
-    // HTSP msg addDvrEntry
-    TRACE(TRACE_INFO, "HTSP", "addSchedule action on event %d", 0);
+    TRACE(TRACE_DEBUG, "HTSP", "addSchedule action on event %d", evac->ev_id);
+    m = htsmsg_create_map();
+    htsmsg_add_str(m, "method", "addDvrEntry");
+    htsmsg_add_u32(m, "eventId", evac->ev_id);
+    if((m = htsp_reqreply(evac->ev_hc, m)) != NULL) {
+      htsmsg_get_u32(m, "success", &success);
+      if(success != 1) {
+	msg = htsmsg_get_str(m, "error");
+	if(!msg)
+	  msg = "Failed to add schedule";
+	TRACE(TRACE_DEBUG,"HTSP", msg);
+      }
+    }
   } else {
     TRACE(TRACE_DEBUG, "HTSP", "Unknown action '%s' on event", action);
   }
@@ -610,6 +625,7 @@ update_events(htsp_connection_t *hc, htsp_channel_t *ch)
 
 	event_action_ctrl_t *evac = calloc(1, sizeof(event_action_ctrl_t));
 	evac->ev_id = ev->ev_id;
+	evac->ev_hc = hc;
 	prop_subscribe(PROP_SUB_TRACK_DESTROY,
 		 PROP_TAG_CALLBACK, event_action_handler, evac,
 		 PROP_TAG_COURIER, hc->hc_event_courier,
