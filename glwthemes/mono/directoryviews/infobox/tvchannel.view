@@ -39,7 +39,11 @@ widget(container_y, {
 	.focusable = true;
 	.focusOnClick = true;
         .color = select(isFocused(), 1.0, 0.6);
-	onEvent(activate, deliverEvent($self, "addSchedule"));
+	
+         onEvent(activate, 
+	     select($self.dvr.state, 
+	         deliverEvent($self.dvr, "delete"),
+	    	 deliverEvent($self, "addSchedule")));
       });
 
     });
