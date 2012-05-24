@@ -166,8 +166,8 @@ typedef struct htsp_connection {
   prop_t *hc_dvr_entries_nodes;
 
   int hc_pending_events;
-  prop_courier_t *hc_event_courier;
-
+  prop_courier_t *hc_courier;
+  
   hts_mutex_t hc_rpc_mutex;
   hts_cond_t hc_rpc_cond;
   struct htsp_msg_queue hc_rpc_queue;
@@ -628,7 +628,7 @@ update_events(htsp_connection_t *hc, htsp_channel_t *ch)
 	evac->ev_hc = hc;
 	prop_subscribe(PROP_SUB_TRACK_DESTROY,
 		 PROP_TAG_CALLBACK, event_action_handler, evac,
-		 PROP_TAG_COURIER, hc->hc_event_courier,
+		 PROP_TAG_COURIER, hc->hc_courier,
 		 PROP_TAG_ROOT, e,
 		 NULL);
 	
@@ -707,6 +707,74 @@ htsp_dvr_entry_get(htsp_connection_t *hc, int id)
     if(de->de_id == id)
       break;
   return de;
+}
+
+/**
+ *
+ */
+typedef struct dvr_entry_action_ctrl {
+  int de_id;
+  htsp_connection_t *de_hc;
+} dvr_entry_action_ctrl_t;
+
+/**
+ *
+ */
+static void
+dvr_entry_dispatch_action(dvr_entry_action_ctrl_t *deac, const char *action)
+{
+  uint32_t success;
+  htsmsg_t *m;
+  if(!strcmp(action, "delete")) {
+    TRACE(TRACE_DEBUG, "HTSP", "delete action on dvr entry %d", deac->de_id);
+    m = htsmsg_create_map();
+    htsmsg_add_str(m, "method", "deleteDvrEntry");
+    htsmsg_add_u32(m, "dvrEntryId", deac->de_id);
+    if((m = htsp_reqreply(deac->de_hc, m)) != NULL) {
+      htsmsg_get_u32(m, "success", &success);
+      if(success != 1)
+	  TRACE(TRACE_DEBUG,"HTSP", 
+		"Failed to delete dvr entry id %d",deac->de_id);     
+    }
+  } else {
+    TRACE(TRACE_DEBUG, "HTSP", "Unknown action '%s' on dvr entry", action);
+  }
+}
+
+static void
+dvr_entry_action_handler(void *opaque, prop_event_t event, ...)
+{
+  dvr_entry_action_ctrl_t *deac = opaque;
+  va_list ap;
+  event_t *e;
+
+  va_start(ap, event);
+
+  TRACE(TRACE_DEBUG, "HTSP", "Dvr entry %d action handler event %d", deac->de_id, event);
+
+  switch(event) {
+  case PROP_DESTROYED:
+    free(deac);
+    break;
+  case PROP_EXT_EVENT:
+    e =  va_arg(ap, event_t *);
+
+    if(event_is_type(e, EVENT_ACTION_VECTOR)) {
+      event_action_vector_t *eav = (event_action_vector_t *)e;
+      int i;
+      for(i = 0; i < eav->num; i++)
+	dvr_entry_dispatch_action(deac, action_code2str(eav->actions[i]));
+    
+    } else if(event_is_type(e, EVENT_DYNAMIC_ACTION)) {
+      dvr_entry_dispatch_action(deac, e->e_payload);
+    }
+    break;
+
+  default:
+    break;
+  }
+
+  va_end(ap);
 }
 
 /*
@@ -791,6 +859,15 @@ htsp_dvrEntryAddUpdate(htsp_connection_t *hc, htsmsg_t *m, int create)
 
     } else
       TRACE(TRACE_ERROR,"HTSP", "Failed to find channel %d for dvrentry %d.", channel, de->de_id);
+
+    dvr_entry_action_ctrl_t *deac = calloc(1, sizeof(dvr_entry_action_ctrl_t));
+    deac->de_id = de->de_id;
+    deac->de_hc = hc;
+    prop_subscribe(PROP_SUB_TRACK_DESTROY,
+		   PROP_TAG_CALLBACK, dvr_entry_action_handler, deac,
+		   PROP_TAG_COURIER, hc->hc_courier,
+		   PROP_TAG_ROOT, m,
+		   NULL);
 
     if(prop_set_parent_ex(de->de_root, hc->hc_dvr_entries_nodes,
 			  n ? n->de_root : NULL, NULL))
@@ -1263,7 +1340,7 @@ htsp_worker_thread(void *aux)
     if(hc->hc_pending_events != 0) {
       hc->hc_pending_events = 0;
       hts_mutex_unlock(&hc->hc_worker_mutex);
-      prop_courier_poll(hc->hc_event_courier);
+      prop_courier_poll(hc->hc_courier);
       continue;
     }
 
@@ -1555,7 +1632,7 @@ htsp_connection_find(const char *url, char *path, size_t pathlen,
   prop_set_string(prop_create(hc->hc_channels_model, "type"),
 		  "directory");
 
-  hc->hc_event_courier = prop_courier_create_notify(htsp_courier_notify, hc);
+  hc->hc_courier = prop_courier_create_notify(htsp_courier_notify, hc);
 
   hts_mutex_init(&hc->hc_rpc_mutex);
   hts_cond_init(&hc->hc_rpc_cond, &hc->hc_rpc_mutex);
