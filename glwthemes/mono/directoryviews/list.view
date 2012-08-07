@@ -77,7 +77,12 @@ widget(keyintercept, {
 				"playlist",  "theme://svg/List",
 				"video",     "theme://svg/Movie",
 				"album",     "theme://svg/Disc",
-				"plugin",    "theme://svg/Plugin"
+				"plugin",    "theme://svg/Plugin",
+				"dvr", 	     translate($self.metadata.state, "theme://svg/File",
+				               "recording", "theme://svg/Recording",
+					       "scheduled", "theme://svg/Scheduled",
+					       "completed", "theme://svg/Check",
+					       "error", "theme://svg/Alert")         
 			       ) + ".svg";
 	    .shadow = true;
 	  });

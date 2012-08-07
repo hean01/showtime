@@ -179,6 +179,8 @@ main(int argc, char **argv)
   int nuiargs = 0;
   int can_standby = 0;
   int can_poweroff = 0;
+  int can_open_shell = 0;
+  int can_logout = 0;
   int r;
 #if ENABLE_HTTPSERVER
   int do_upnp = 1;
@@ -285,6 +287,14 @@ main(int argc, char **argv)
       can_poweroff = 1;
       argc -= 1; argv += 1;
       continue;
+    } else if(!strcmp(argv[0], "--with-logout")) {
+      can_logout = 1;
+      argc -= 1; argv += 1;
+      continue;
+    } else if(!strcmp(argv[0], "--with-openshell")) {
+      can_open_shell = 1;
+      argc -= 1; argv += 1;
+      continue;
     } else if(!strcmp(argv[0], "--ui") && argc > 1) {
       if(nuiargs < 16)
 	uiargs[nuiargs++] = argv[1];
@@ -341,6 +351,9 @@ main(int argc, char **argv)
   /* Architecture specific init */
   arch_init();
 
+  /* Initialize settings */
+  settings_init();
+
   TRACE(TRACE_DEBUG, "core", "Loading resources from %s", showtime_dataroot());
 
   /* Try to create cache path */
@@ -381,9 +394,6 @@ main(int argc, char **argv)
 
   /* Initialize keyring */
   keyring_init();
-
-  /* Initialize settings */
-  settings_init();
 
   /* Initialize libavcodec & libavformat */
   av_lockmgr_register(fflockmgr);
@@ -455,7 +465,7 @@ main(int argc, char **argv)
 
 
   /* */
-  runcontrol_init(can_standby, can_poweroff);
+  runcontrol_init(can_standby, can_poweroff, can_logout, can_open_shell);
 
   TRACE(TRACE_DEBUG, "core", "Starting UI");
 
