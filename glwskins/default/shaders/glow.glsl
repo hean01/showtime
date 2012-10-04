@@ -17,7 +17,7 @@ void main( void ) {
 
 	float vertColor = 0.0;
 	for(float i=0.0; i<COUNT; i++){
-		float t = time*(i*0.1+1.)/16.0 + (i*0.1+0.1); 
+		float t = time*(i*0.1+1.)/24.0 + (i*0.1+0.1); 
 		uPos.y += sin(-t+uPos.x*2.0)*0.45 -t*0.3;
 		uPos.x += sin(-t+uPos.y*5.0)*0.25 ;
 		float value = (sin(uPos.y*10.0*0.5)+sin(uPos.x*10.1+t*0.3) );
