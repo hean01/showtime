@@ -4,10 +4,12 @@ uniform vec2 mouse;
 uniform vec2 resolution;
 uniform sampler2D tex;
 
-const float COUNT = 3.0;
+const float COUNT = 5.0;
 
-//MoltenMetal by CuriousChettai@gmail.com
-//Linux fix
+// MoltenMetal by CuriousChettai@gmail.com
+//
+// Modified by Henrik Andersson for Showtime.
+//
 
 void main( void ) {  
 	vec2 uPos = ( gl_FragCoord.xy / resolution.y );//normalize wrt y axis
@@ -25,12 +27,14 @@ void main( void ) {
 		vertColor += stripColor/10.0;
 	}
 	
-	float temp = max(0.1, vertColor);
+	float temp = min(max(0.1, vertColor), 1.0);
 	vec3 texcol = texture2D(tex, gl_FragCoord.xy/resolution.xy).xyz;
-	texcol.r = (texcol.r * 0.5) + (temp * 0.5);
-	texcol.g = (texcol.g * 0.5) + (temp * 0.5);	
-	texcol.b = (texcol.b * 0.5) + (temp * 0.5);
-
-
-	gl_FragColor = vec4(texcol, 0.1);
+	
+	// screen blend and multiply with tex
+	temp = 1.0 - temp;
+	texcol.r *= 1.0 - (temp * (1.0 - texcol.r));
+	texcol.g *= 1.0 - (temp * (1.0 - texcol.g));
+	texcol.b *= 1.0 - (temp * (1.0 - texcol.b));
+	
+	gl_FragColor = vec4(texcol, 1.0);
 }
