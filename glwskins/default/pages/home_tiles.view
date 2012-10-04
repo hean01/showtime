@@ -128,7 +128,7 @@ widget(container_y, {
 	source: "dataroot://resources/svg/Search.svg";
 	shadow: true;
 	sizeScale: 2;
-	color: [0.431, 0.811, 1];
+	color: [0.8, 0.8, 0.8];
 	alpha: iir($view.searchFocused || $view.searchQuery, 10);
       });
 
@@ -137,7 +137,7 @@ widget(container_y, {
 	widget(backdrop, {
 	  height: $ui.size * 2;
 	  filterConstraintX: true;
-	  color: [0.431, 0.811, 1] * 0.5 + 0.5 * iir($view.searchFocused, 10);
+	  color: [0.8, 0.8, 0.8] * 0.5 + 0.5 * iir($view.searchFocused, 10);
 	  source: "skin://graphics/shadedplate.png";
 	  border:  4;
 	  padding: [0, -2, -2, -2];
