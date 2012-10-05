@@ -28,9 +28,8 @@ widget(container_z, {
         ($global.nav.currentpage.model.metadata.backgroundAlpha ??
          $global.nav.currentpage.glw.backgroundAlpha ??
          1);
-    });
-    widget(quad, { 
-	fragmentShader: "skin://shaders/glow.glsl";
+
+      fragmentShader: "skin://shaders/glow.glsl";
     });
   });
 

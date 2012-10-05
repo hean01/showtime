@@ -2,7 +2,9 @@
 uniform float time;
 uniform vec2 mouse;
 uniform vec2 resolution;
-uniform sampler2D tex;
+uniform sampler2D u_tex;
+
+varying vec4 f_tex;
 
 const float COUNT = 5.0;
 
@@ -28,7 +30,7 @@ void main( void ) {
 	}
 	
 	float temp = min(max(0.1, vertColor), 1.0);
-	vec3 texcol = texture2D(tex, gl_FragCoord.xy/resolution.xy).xyz;
+	vec3 texcol = texture2D(u_tex, f_tex.xy).xyz;
 	
 	// screen blend and multiply with tex
 	temp = 1.0 - temp;
