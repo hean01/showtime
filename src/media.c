@@ -703,9 +703,10 @@ mp_enqueue_event_locked(media_pipe_t *mp, event_t *e)
     break;
   }
 
-  if(event_is_action(e, ACTION_PLAYPAUSE ) ||
-     event_is_action(e, ACTION_PLAY ) ||
-     event_is_action(e, ACTION_PAUSE)) {
+  if((mp->mp_flags&MP_BYPASS_CONTROL) &&
+     (event_is_action(e, ACTION_PLAYPAUSE ) ||
+      event_is_action(e, ACTION_PLAY ) ||
+      event_is_action(e, ACTION_PAUSE))) {
     
     mp->mp_hold = action_update_hold_by_event(mp->mp_hold, e);
     if(mp->mp_flags & MP_VIDEO)
@@ -726,12 +727,12 @@ mp_enqueue_event_locked(media_pipe_t *mp, event_t *e)
     send_hold(mp);
     return;
 
-  } else if(event_is_action(e, ACTION_SEEK_BACKWARD)) {
+  } else if((mp->mp_flags & MP_BYPASS_CONTROL) && event_is_action(e, ACTION_SEEK_BACKWARD)) {
     mp_direct_seek(mp, mp->mp_seek_base -= 15000000);
     return;
   }
 
-  if(event_is_action(e, ACTION_SEEK_FORWARD)) {
+  if((mp->mp_flags & MP_BYPASS_CONTROL) && event_is_action(e, ACTION_SEEK_FORWARD)) {
     mp_direct_seek(mp, mp->mp_seek_base += 15000000);
     return;
   }

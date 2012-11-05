@@ -1,6 +1,7 @@
 /*
  *  HTSP client
  *  Copyright (C) 2008,2009 Andreas Öman
+ *  Copyright (C) 2012 Henrik Andersson
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -93,6 +94,8 @@ typedef struct htsp_connection {
 
   uint8_t hc_challenge[32];
 
+  int hc_timeshift_support;
+
   int hc_is_async;
 
   int hc_refcount;
@@ -146,6 +149,7 @@ typedef struct htsp_subscription {
   LIST_ENTRY(htsp_subscription) hs_link;
 
   uint32_t hs_sid;
+  int hs_paused;
   media_pipe_t *hs_mp;
   
   struct htsp_subscription_stream_list hs_streams;
@@ -172,6 +176,7 @@ typedef struct htsp_subscription_stream {
 static void htsp_subscriptionStart(htsp_connection_t *hc, htsmsg_t *m);
 static void htsp_subscriptionStop(htsp_connection_t *hc, htsmsg_t *m);
 static void htsp_subscriptionStatus(htsp_connection_t *hc, htsmsg_t *m);
+static void htsp_subscriptionSpeed(htsp_connection_t *hc, htsmsg_t *m);
 static void htsp_queueStatus(htsp_connection_t *hc, htsmsg_t *m);
 static void htsp_signalStatus(htsp_connection_t *hc, htsmsg_t *m);
 static void htsp_mux_input(htsp_connection_t *hc, htsmsg_t *m);
@@ -351,7 +356,8 @@ htsp_login(htsp_connection_t *hc)
 {
   const void *ch;
   size_t chlen;
-  htsmsg_t *m;
+  htsmsg_t *m, *cap;
+  htsmsg_field_t *f;
 
   m = htsmsg_create_map();
   htsmsg_add_str(m, "clientname", "HTS Showtime");
@@ -367,6 +373,18 @@ htsp_login(htsp_connection_t *hc)
     return -1;
   }
   memcpy(hc->hc_challenge, ch, 32);
+
+  cap = htsmsg_get_list(m, "servercapabilities");
+  hc->hc_timeshift_support = 0;
+  if (cap) {
+    HTSMSG_FOREACH(f, cap) {
+      if (f->hmf_type == HMF_STR) {
+	if (!strcmp("timeshift", f->hmf_str))
+	  TRACE(TRACE_DEBUG, "HTSP", "Server has timeshift support.");
+	  hc->hc_timeshift_support = 1;
+      }
+    };
+  }
 
   htsmsg_destroy(m);
 
@@ -384,6 +402,38 @@ htsp_login(htsp_connection_t *hc)
   return 0;
 }
 
+/**
+ *
+ */
+static int
+htsp_set_speed(htsp_connection_t *hc, htsp_subscription_t *hs, int speed)
+{
+  htsmsg_t *m;
+  const char *err;
+  const size_t errlen=512;
+   char errbuf[errlen];
+
+  m = htsmsg_create_map();
+  htsmsg_add_str(m, "method", "subscriptionSpeed");
+  htsmsg_add_s32(m, "subscriptionId", hs->hs_sid);
+  htsmsg_add_s32(m, "speed", speed);
+
+  if ((m = htsp_reqreply(hc, m)) == NULL)
+    return -1;
+
+  TRACE(TRACE_DEBUG, "HTSP", "Requesting subscription speed %d", speed);
+
+  if((err = htsmsg_get_str(m, "error")) != NULL) {
+    snprintf(errbuf, errlen, "From server: %s", err);
+    TRACE(TRACE_DEBUG, "HTSP", errbuf);
+    htsmsg_destroy(m);
+    return -1;
+  }
+
+  htsmsg_destroy(m);
+
+  return 0;
+}
 
 /**
  *
@@ -868,6 +918,8 @@ htsp_worker_thread(void *aux)
 	htsp_queueStatus(hc, m);
       else if(!strcmp(method, "signalStatus"))
 	htsp_signalStatus(hc, m);
+      else if(!strcmp(method, "subscriptionSpeed"))
+	htsp_subscriptionSpeed(hc, m);
       else if(!strcmp(method, "initialSyncCompleted")) {
 	/* nop for us */
       } else
@@ -1416,6 +1468,9 @@ htsp_subscriber(htsp_connection_t *hc, htsp_subscription_t *hs,
 
   mp_configure(mp, 0, MP_BUFFER_SHALLOW, 0);
 
+  if (hc->hc_timeshift_support)
+    mp->mp_flags |= MP_BYPASS_CONTROL;
+
   if(primary)
     mp_become_primary(mp);
   else
@@ -1482,6 +1537,29 @@ htsp_subscriber(htsp_connection_t *hc, htsp_subscription_t *hs,
 	rstr_release(rurl);
 	return NULL;
       }
+
+    } else if(event_is_action(e, ACTION_PLAY)) {
+
+      htsp_set_speed(hc, hs, 100);
+
+    } else if(event_is_action(e, ACTION_PAUSE)) {
+
+      htsp_set_speed(hc, hs, 0);
+
+    } else if(event_is_action(e, ACTION_PLAYPAUSE)) {
+
+      if (hs->hs_paused)
+	htsp_set_speed(hc, hs, 100);
+      else
+	htsp_set_speed(hc, hs, 0);
+
+    } else if(event_is_action(e, ACTION_SEEK_FORWARD)) {
+
+      htsp_set_speed(hc, hs, 250);
+
+    } else if(event_is_action(e, ACTION_SEEK_BACKWARD)) {
+
+      htsp_set_speed(hc, hs, -250);
 
     } else if(event_is_type(e, EVENT_EXIT) ||
 	      event_is_type(e, EVENT_PLAY_URL))
@@ -1899,6 +1977,32 @@ htsp_subscriptionStatus(htsp_connection_t *hc, htsmsg_t *m)
   hts_mutex_unlock(&hc->hc_subscription_mutex);
 }
 
+static void
+htsp_subscriptionSpeed(htsp_connection_t *hc, htsmsg_t *m)
+{
+  htsp_subscription_t *hs;
+  int speed = 0;
+
+  if ((hs = htsp_find_subscription_by_msg(hc, m)) == NULL) {
+    int subid;
+    htsmsg_get_s32(m, "subscriptionId", &subid);
+    TRACE(TRACE_DEBUG, "HTSP", "Subscription %d not found.", subid);
+    return;
+  }
+
+  if (htsmsg_get_s32(m, "speed", &speed)) {
+      TRACE(TRACE_DEBUG, "HTSP", "Failed to read speed from message");
+      hts_mutex_unlock(&hc->hc_subscription_mutex);
+      return;
+  }
+
+  TRACE(TRACE_DEBUG, "HTSP", "Subscription playback speed changed to %d", speed);
+
+  hs->hs_paused = speed ? 0 : 1;
+
+  hts_mutex_unlock(&hc->hc_subscription_mutex);
+}
+
 
 /**
  *
@@ -1946,7 +2050,6 @@ static void
 htsp_signalStatus(htsp_connection_t *hc, htsmsg_t *m)
 {
 }
-
 
 /**
  *

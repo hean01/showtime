@@ -222,10 +222,10 @@ typedef struct media_pipe {
 
   LIST_ENTRY(media_pipe) mp_stack_link;
   int mp_flags;
-#define MP_PRIMABLE      0x1
-#define MP_ON_STACK      0x2
-#define MP_VIDEO         0x4
-
+#define MP_PRIMABLE          0x1
+#define MP_ON_STACK          0x2
+#define MP_VIDEO             0x4
+#define MP_BYPASS_CONTROL    0x8
   int mp_eof;   // End of file: We don't expect to need to read more data
   int mp_hold;  // Paused
 
